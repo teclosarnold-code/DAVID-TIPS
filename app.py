@@ -32,67 +32,77 @@ def extract_metrics(score_dom, score_ext):
         'BTTS': "OUI" if (score_dom > 0 and score_ext > 0) else "NON" # Les deux marquent
     }
 
-# --- 2. DONNÉES HISTORIQUES (La source du "Paradoxe") ---
-# Simulation basée sur ton exemple du 29-09-2022
-# Remplacer toute la fonction load_database_2022 par ceci :
+# --- 2. DONNÉES HISTORIQUES (Chargement CSV) ---
 @st.cache_data
 def load_database_2022():
-    # On charge le fichier CSV qu'on va mettre dans le projet
-    # Assure-toi que ton CSV a les colonnes : Date, Home, Away, S_Dom, S_Ext
+    # On charge le fichier CSV
     try:
-        df = pd.read_csv("data_2022.csv") 
-        # Conversion des dates si nécessaire
-        # df['Date'] = pd.to_datetime(df['Date'], dayfirst=True) 
+        # Essaye de lire avec séparateur virgule, sinon point-virgule (selon ton excel)
+        try:
+            df = pd.read_csv("data_2022.csv", sep=',')
+        except:
+            df = pd.read_csv("data_2022.csv", sep=';')
+
+        # Vérification minimale des colonnes
+        required_cols = ['Home', 'Away', 'S_Dom', 'S_Ext']
+        if not all(col in df.columns for col in required_cols):
+            st.error(f"Le fichier CSV doit contenir les colonnes : {required_cols}")
+            return pd.DataFrame()
         
-        # Calcul des metrics (identique au code précédent)
+        # Calcul des metrics
         metrics_list = df.apply(lambda x: extract_metrics(x['S_Dom'], x['S_Ext']), axis=1)
         df_metrics = pd.DataFrame(metrics_list.tolist())
         return pd.concat([df, df_metrics], axis=1)
+
     except FileNotFoundError:
-        st.error("ERREUR: Le fichier data_2022.csv est introuvable.")
-        return pd.DataFrame()
-    df = pd.DataFrame(data)
-    # On calcule les métriques pour chaque match historique
-    metrics_list = df.apply(lambda x: extract_metrics(x['S_Dom'], x['S_Ext']), axis=1)
-    df_metrics = pd.DataFrame(metrics_list.tolist())
-    return pd.concat([df, df_metrics], axis=1)
+        # Si pas de CSV, on charge les données démo pour que l'app ne plante pas
+        st.warning("⚠️ Fichier 'data_2022.csv' non trouvé. Chargement des données de DÉMONSTRATION.")
+        data = [
+            {'Date': '29-09-2022', 'Home': 'FBC Melgar', 'Away': 'Binacional', 'S_Dom': 2, 'S_Ext': 1},
+            {'Date': '29-09-2022', 'Home': 'AA', 'Away': '1Z', 'S_Dom': 4, 'S_Ext': 1},
+            {'Date': '29-09-2022', 'Home': 'BB', 'Away': '2Y', 'S_Dom': 4, 'S_Ext': 1},
+            {'Date': '29-09-2022', 'Home': 'CC', 'Away': '3X', 'S_Dom': 0, 'S_Ext': 1},
+        ]
+        df = pd.DataFrame(data)
+        metrics_list = df.apply(lambda x: extract_metrics(x['S_Dom'], x['S_Ext']), axis=1)
+        df_metrics = pd.DataFrame(metrics_list.tolist())
+        return pd.concat([df, df_metrics], axis=1)
 
 # --- 3. FIXTURES ACTUELLES (Le Jour J - 15-10-2025) ---
 def load_fixtures_2025():
     # Simulation des matchs du jour qui doivent être scannés
     return pd.DataFrame([
         {'Home': 'FBC Melgar', 'Away': 'Alianza Huanuco', 'Heure': '20:00'},
-        {'Home': 'AA', 'Away': '8J', 'Heure': '18:00'}, # Correspondance Équipe Dom
-        {'Home': 'X3', 'Away': '4P', 'Heure': '21:00'}, # Pas de correspondance directe simple
-        {'Home': 'EE', 'Away': 'TH', 'Heure': '19:30'}, # Correspondance Équipe Dom
-        {'Home': 'Man City', 'Away': 'Liverpool', 'Heure': '21:00'}, # Hors système
+        {'Home': 'AA', 'Away': '8J', 'Heure': '18:00'}, 
+        {'Home': 'EE', 'Away': 'TH', 'Heure': '19:30'}, 
+        {'Home': 'Man City', 'Away': 'Liverpool', 'Heure': '21:00'},
     ])
 
 # --- 4. ALGORITHME DE CORRESPONDANCE "TVA" ---
 
 def scan_matches(history, today):
     results = []
-    
+    if history.empty:
+        return pd.DataFrame()
+
     for idx, match_now in today.iterrows():
-        # LA RÈGLE D'OR : On cherche l'équipe Domicile dans l'historique Domicile
-        # (On pourrait aussi chercher Extérieur vs Extérieur)
+        # Recherche correspondance Domicile (Home vs Home)
+        # On nettoie les espaces éventuels pour éviter les erreurs bêtes
+        match_now_home = str(match_now['Home']).strip()
         
-        # Recherche correspondance Domicile
-        match_found = history[history['Home'] == match_now['Home']]
+        # On filtre
+        match_found = history[history['Home'].astype(str).str.strip() == match_now_home]
         
         if not match_found.empty:
             historical_data = match_found.iloc[0]
             
-            # C'est ici que le Paradoxe des Anniversaires prend son sens
-            # On projette que le "Pattern" va se répéter
             results.append({
                 'Match': f"{match_now['Home']} vs {match_now['Away']}",
-                'Match_Ref': f"{historical_data['Home']} vs {historical_data['Away']} ({historical_data['Date']})",
+                'Match_Ref': f"{historical_data['Home']} vs {historical_data['Away']}",
                 'Score_Ref': historical_data['Score_Exact'],
                 'Total_Buts': historical_data['Total_Buts'],
                 'O25': historical_data['O25'],
                 'BTTS': historical_data['BTTS'],
-                'Confiance': 'HAUTE' if historical_data['S_Dom'] + historical_data['S_Ext'] < 6 else 'MOYENNE' # Moins de variance sur les petits scores
             })
     
     return pd.DataFrame(results)
@@ -106,9 +116,16 @@ col_control, col_display = st.columns([1, 3])
 
 with col_control:
     st.header("Paramètres")
-    date_ref = st.date_input("Date Référence (Passé)", pd.to_datetime("2022-09-29"))
-    date_target = st.date_input("Date Cible (Futur)", pd.to_datetime("2025-10-15"))
-    st.info(f"Intervalle temporel détecté : {(date_target - pd.to_datetime(date_ref)).days} jours")
+    # CORRECTION DE L'ERREUR ICI : On force les dates
+    d_ref_input = st.date_input("Date Référence (Passé)", pd.to_datetime("2022-09-29"))
+    d_target_input = st.date_input("Date Cible (Futur)", pd.to_datetime("2025-10-15"))
+    
+    # Conversion explicite pour éviter le TypeError
+    date_ref = pd.to_datetime(d_ref_input)
+    date_target = pd.to_datetime(d_target_input)
+    
+    delta_days = (date_target - date_ref).days
+    st.info(f"Intervalle temporel détecté : {delta_days} jours")
     
     filter_goals = st.slider("Filtrer par nbr de buts min.", 0, 5, 1)
 
@@ -145,29 +162,4 @@ with col_display:
                             </div>
                             <div>
                                 <div style="font-size:12px; color:#aaa">LES 2 MARQUENT</div>
-                                <div style="font-size:24px; font-weight:bold; color:#e74c3c">{row['BTTS']}</div>
-                            </div>
-                        </div>
-                    </div>
-                    <br>
-                    """, unsafe_allow_html=True)
-    else:
-        st.warning("Aucune correspondance cyclique détectée pour cette date. Le système protège votre capital.")
-
-# Section Explicative Mathématique
-st.markdown("---")
-with st.expander("📚 Voir la logique mathématique (Théorie TVA)"):
-    st.write("""
-    **Pourquoi ça marche ?**
-    Si l'équipe A a produit un résultat X dans une configuration temporelle précise (2022), et que les conditions sont répliquées en 2025, la probabilité d'obtenir le même "Paquet de stats" (Score + O/U + Buts) est supérieure à la probabilité aléatoire.
-    
-    **Le "Combo" :**
-    Nous ne parions pas sur 3 choses différentes. Si le Score Exact est 2-1 :
-    1. C'est une Victoire.
-    2. C'est un Over 2.5 (Automatique).
-    3. C'est "Les deux marquent" (Automatique).
-    
-    C'est là que réside la **Value**. Un seul événement valide 4 paris.
-    """)
-
-st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                                
